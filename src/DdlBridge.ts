@@ -1,13 +1,5 @@
 import { Model } from "./Model";
 
-const typeMap: Record<string, string> = {
-    "integer": "INTEGER",
-    "number": "NUMERIC",
-    "string": "TEXT",
-    "boolean": "BOOLEAN",
-    "date": "DATE"
-};
-
 function toSnakeCase(name: string): string {
     return name
         .replace(/([A-Z])/g, '_$1')
@@ -24,20 +16,57 @@ export class DdlBridge {
         return `CREATE TABLE ${tableName} (\n${columns.join(',\n')}\n);`;
     }
 
+    toDdlArray(models: Model[]): string[] {
+        return models.map(model => this.toDdl(model));
+    }
+
     toDdlFromProcessorResult(fields: Array<{name: string, value: any}>, tableName: string): string {
         const columns = fields.map(f => `    ${toSnakeCase(f.name)} ${this.inferSqlType(f.value)}`);
         return `CREATE TABLE ${tableName} (\n${columns.join(',\n')}\n);`;
     }
 
     convertField(field: Record<string, any>): string {
-        if (!Object.hasOwn(typeMap, field.type)) {
-            throw new Error(`Unsupported field type: ${field.type} for field ${field.name}`);
-        }
         const colName = toSnakeCase(field.name);
-        const sqlType = typeMap[field.type];
+        const sqlType = this.getSqlType(field);
         const parts = this.getConstraintParts(field);
         const constraintStr = parts.length > 0 ? ' ' + parts.join(' ') : '';
         return `    ${colName} ${sqlType}${constraintStr}`;
+    }
+
+    private getSqlType(field: Record<string, any>): string {
+        const params = field.parameters || {};
+        switch (field.type) {
+            case 'integer':
+            case 'INT32':   return 'INTEGER';
+            case 'INT64':   return 'BIGINT';
+            case 'FLOAT32': return 'REAL';
+            case 'FLOAT64': return 'DOUBLE PRECISION';
+            case 'number':
+            case 'DECIMAL':
+                return (params.precision !== undefined && params.scale !== undefined)
+                    ? `NUMERIC(${params.precision}, ${params.scale})`
+                    : 'NUMERIC';
+            case 'STRING':
+                return params.length !== undefined ? `VARCHAR(${params.length})` : 'TEXT';
+            case 'string':
+            case 'TEXT':    return 'TEXT';
+            case 'boolean':
+            case 'BOOLEAN': return 'BOOLEAN';
+            case 'UUID':    return 'UUID';
+            case 'date':
+            case 'DATE':    return 'DATE';
+            case 'TIME':    return 'TIME';
+            case 'DATETIME':
+            case 'TIMESTAMP': return 'TIMESTAMP';
+            case 'TIMESTAMP_TZ': return 'TIMESTAMP WITH TIME ZONE';
+            case 'DURATION': return 'INTERVAL';
+            case 'OBJECT':
+            case 'UNION':
+            case 'JSON':    return 'JSONB';
+            case 'ENUM':    return 'TEXT';
+            default:
+                throw new Error(`Unsupported field type: ${field.type} for field ${field.name}`);
+        }
     }
 
     private inferSqlType(value: any): string {
@@ -61,12 +90,22 @@ export class DdlBridge {
             if (c.max !== undefined) range.push(`${col} <= ${c.max}`);
             parts.push(`CHECK (${range.join(' AND ')})`);
         }
-        if (Array.isArray(c.enum)) {
-            const values = c.enum.map((v: any) => `'${v}'`).join(', ');
-            parts.push(`CHECK (${col} IN (${values}))`);
+        const enumValues = Array.isArray(c.enum)
+            ? c.enum
+            : (field.type === 'ENUM' && Array.isArray((field.parameters || {}).values)
+                ? field.parameters.values
+                : null);
+        if (enumValues) {
+            const vals = enumValues.map((v: any) => `'${v}'`).join(', ');
+            parts.push(`CHECK (${col} IN (${vals}))`);
         }
         if (c.regex !== undefined) {
             parts.push(`CHECK (${col} ~ '${c.regex}')`);
+        }
+        if (c.foreign_key !== undefined) {
+            const refTable = toSnakeCase(c.foreign_key.ref);
+            const refCol   = toSnakeCase(c.foreign_key.field);
+            parts.push(`REFERENCES ${refTable}(${refCol})`);
         }
         return parts;
     }
