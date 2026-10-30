@@ -38,6 +38,6 @@
     "vitest": "^3.0.8"
   },
   "dependencies": {
-    "model-algebra-common": "link:../common-typescript"
+    "model-algebra-common": "github:model-algebra/common-typescript"
   }
 }

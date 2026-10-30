@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       model-algebra-common:
-        specifier: link:../common-typescript
-        version: link:../common-typescript
+        specifier: github:model-algebra/common-typescript
+        version: https://codeload.github.com/model-algebra/common-typescript/tar.gz/e4397bc28ae921832bdf781b6fec058b9bdca271
     devDependencies:
       '@types/node':
         specifier: ^22.13.10
@@ -418,6 +418,10 @@ packages:
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
+
+  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/e4397bc28ae921832bdf781b6fec058b9bdca271:
+    resolution: {tarball: https://codeload.github.com/model-algebra/common-typescript/tar.gz/e4397bc28ae921832bdf781b6fec058b9bdca271}
+    version: 0.1.0
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
@@ -859,6 +863,8 @@ snapshots:
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/e4397bc28ae921832bdf781b6fec058b9bdca271: {}
 
   ms@2.1.3: {}
 
