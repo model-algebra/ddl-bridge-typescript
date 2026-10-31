@@ -1,4 +1,2 @@
 onlyBuiltDependencies:
   - esbuild
-  - model-algebra-common
-  - model-algebra-typescript

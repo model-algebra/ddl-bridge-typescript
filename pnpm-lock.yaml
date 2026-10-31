@@ -13,10 +13,10 @@ importers:
         version: 18.1.5
       model-algebra-common:
         specifier: github:model-algebra/common-typescript
-        version: https://codeload.github.com/model-algebra/common-typescript/tar.gz/c5541cc6e887adebd6360024f725d2f3800d230d
+        version: https://codeload.github.com/model-algebra/common-typescript/tar.gz/4ec1c61fb783e349f55cb31796b34f8f316b7561
       model-algebra-typescript:
         specifier: github:model-algebra/model-algebra-typescript
-        version: https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/b45f56e7fc373819a7bff8bb621274e7c8e3ce3a
+        version: https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/a1726f4622f548e7900a60d4a008e12abe9b2839
     devDependencies:
       '@types/node':
         specifier: ^22.13.10
@@ -631,12 +631,12 @@ packages:
     resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
     engines: {node: '>=16 || 14 >=14.17'}
 
-  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/c5541cc6e887adebd6360024f725d2f3800d230d:
-    resolution: {tarball: https://codeload.github.com/model-algebra/common-typescript/tar.gz/c5541cc6e887adebd6360024f725d2f3800d230d}
+  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/4ec1c61fb783e349f55cb31796b34f8f316b7561:
+    resolution: {tarball: https://codeload.github.com/model-algebra/common-typescript/tar.gz/4ec1c61fb783e349f55cb31796b34f8f316b7561}
     version: 0.1.0
 
-  model-algebra-typescript@https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/b45f56e7fc373819a7bff8bb621274e7c8e3ce3a:
-    resolution: {tarball: https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/b45f56e7fc373819a7bff8bb621274e7c8e3ce3a}
+  model-algebra-typescript@https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/a1726f4622f548e7900a60d4a008e12abe9b2839:
+    resolution: {tarball: https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/a1726f4622f548e7900a60d4a008e12abe9b2839}
     version: 0.1.0
 
   ms@2.1.3:
@@ -1416,12 +1416,12 @@ snapshots:
 
   minipass@7.1.3: {}
 
-  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/c5541cc6e887adebd6360024f725d2f3800d230d: {}
+  model-algebra-common@https://codeload.github.com/model-algebra/common-typescript/tar.gz/4ec1c61fb783e349f55cb31796b34f8f316b7561: {}
 
-  model-algebra-typescript@https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/b45f56e7fc373819a7bff8bb621274e7c8e3ce3a:
+  model-algebra-typescript@https://codeload.github.com/model-algebra/model-algebra-typescript/tar.gz/a1726f4622f548e7900a60d4a008e12abe9b2839:
     dependencies:
       ajv: 8.20.0
-      model-algebra-common: https://codeload.github.com/model-algebra/common-typescript/tar.gz/c5541cc6e887adebd6360024f725d2f3800d230d
+      model-algebra-common: https://codeload.github.com/model-algebra/common-typescript/tar.gz/4ec1c61fb783e349f55cb31796b34f8f316b7561
 
   ms@2.1.3: {}
 
