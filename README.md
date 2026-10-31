@@ -128,14 +128,24 @@ undo a removal, rename the backup back; to get rid of backups, drop them.
 
 ```sh
 pnpm install
-pnpm test          # vitest
+pnpm test            # vitest
+pnpm test:coverage   # with a coverage report
 pnpm type-check
 pnpm build
 ```
 
-The migration tests in `src/Migration.db.spec.ts` run against a real PostgreSQL when `MIGRATION_TEST_DATABASE_URL`
-names a server they may create databases on. They also need `pg_dump` of the same major version, on the `PATH` or
-in `PG_DUMP`:
+What the tests cover:
+
+- **`RoundTrip.spec.ts`:** model → DDL → model. Canonical models come back unchanged, one test per type, constraint
+  and table feature. Other models come back in their documented canonical form. DDL becomes stable after one round
+  trip.
+- **`DdlParser.spec.ts`:** `pg_dump` output and hand-written DDL, and every construct that is rejected.
+- **`Migration.spec.ts`:** the statements migrations plan.
+- **`*.db.spec.ts`:** migrations run on a real PostgreSQL. Each scenario creates the old models, writes rows, migrates,
+  then checks the data and that the database has exactly the new models.
+
+The database tests run when `MIGRATION_TEST_DATABASE_URL` names a server they may create databases on. They also
+need `pg_dump` of the same major version, on the `PATH` or in `PG_DUMP`; without the URL they are skipped:
 
 ```sh
 docker run -d --name pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:18

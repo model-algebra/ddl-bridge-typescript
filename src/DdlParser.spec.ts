@@ -196,3 +196,158 @@ describe('DdlBridge.toTarget', () => {
         expect(new DdlBridge().toTarget(Model.fromJSON(json))).toContain('PRIMARY KEY');
     });
 });
+
+describe('parseDdl of hand-written DDL', () => {
+    const model = (ddl: string, name: string, options = {}) => toModelData(parseDdl(ddl, options).models.get(name)!);
+
+    it('reads types and defaults written in other ways', () => {
+        const t = model(`
+            CREATE TABLE t (
+                a integer NULL,
+                b text DEFAULT now(),
+                c numeric(10),
+                d varchar,
+                e interval(3),
+                f boolean DEFAULT 't',
+                g integer DEFAULT '5',
+                h integer DEFAULT -(5),
+                i text[] DEFAULT '{a,"b c","d\\"e"}',
+                j integer[] DEFAULT '{1, 2}',
+                k character(2),
+                l time with time zone,
+                m json DEFAULT '[1]',
+                n bit varying(8)
+            );`, 'T');
+        expect(t.fields).toEqual([
+            { name: 'a', type: 'INT32' },
+            { name: 'b', type: 'TEXT', constraints: { default: { function: 'now' } } },
+            { name: 'c', type: 'DECIMAL', parameters: { precision: 10, scale: 0 } },
+            { name: 'd', type: 'TEXT', targets: { postgresql: { type: 'varchar' } } },
+            { name: 'e', type: 'DURATION', parameters: { precision: 3 } },
+            { name: 'f', type: 'BOOLEAN', constraints: { default: { value: true } } },
+            { name: 'g', type: 'INT32', constraints: { default: { value: 5 } } },
+            { name: 'h', type: 'INT32', constraints: { default: { value: -5 } } },
+            { name: 'i', type: 'ARRAY', parameters: { items: { type: 'TEXT' } }, constraints: { default: { value: ['a', 'b c', 'd"e'] } } },
+            { name: 'j', type: 'ARRAY', parameters: { items: { type: 'INT32' } }, constraints: { default: { value: [1, 2] } } },
+            { name: 'k', type: 'TEXT', targets: { postgresql: { type: 'bpchar(2)' } } },
+            { name: 'l', type: 'TEXT', targets: { postgresql: { type: 'timetz' } } },
+            { name: 'm', type: 'JSON', targets: { postgresql: { type: 'json' } }, constraints: { default: { value: [1] } } },
+            { name: 'n', type: 'TEXT', targets: { postgresql: { type: 'varbit(8)' } } },
+        ]);
+    });
+
+    it('reads negated quoted numbers', () => {
+        const t = model(`CREATE TABLE t (a integer DEFAULT -'5', b numeric CHECK (b >= -'1.5'));`, 'T');
+        expect(t.fields.map(f => f.constraints)).toEqual([{ default: { value: -5 } }, { min: -1.5 }]);
+    });
+
+    it.each([
+        ['bit strings', "CREATE TABLE t (a bit(3) DEFAULT B'101');"],
+        ['negated expressions', 'CREATE TABLE t (a integer DEFAULT -abs(1));'],
+    ])('rejects defaults of %s', (_, ddl) => {
+        expect(() => parseDdl(ddl)).toThrow('only constants');
+    });
+
+    it('reads constraints added and changed by ALTER TABLE, and ignores what does not change the model', () => {
+        const t = model(`
+            CREATE TABLE t (a integer, b text);
+            ALTER TABLE t ALTER COLUMN a SET NOT NULL, ALTER COLUMN b SET DEFAULT 'x';
+            ALTER TABLE t ALTER COLUMN b DROP DEFAULT;
+            ALTER TABLE t ADD CONSTRAINT t_a_key UNIQUE (a);
+            ALTER TABLE t OWNER TO someone;
+            ALTER INDEX t_a_key SET (fillfactor = 50);
+            ALTER SEQUENCE IF EXISTS s OWNED BY NONE;
+            COMMENT ON SCHEMA public IS 'Standard public schema';
+            CREATE EXTENSION IF NOT EXISTS citext;
+        `, 'T');
+        expect(t.fields).toEqual([
+            { name: 'a', type: 'INT32', constraints: { nullable: false, unique: true } },
+            { name: 'b', type: 'TEXT', constraints: { default: { value: 'x' } } },
+        ]);
+    });
+
+    it('reads a foreign key without columns as one to the primary key', () => {
+        const models = parseDdl(`
+            CREATE TABLE a (id integer PRIMARY KEY);
+            CREATE TABLE b (code text, CONSTRAINT b_key PRIMARY KEY (code));
+            CREATE TABLE c (a_id integer REFERENCES a, b_code text REFERENCES b);
+        `).models;
+        expect(toModelData(models.get('C')!).fields.map(f => f.constraints?.foreignKey)).toEqual([
+            { ref: 'A', field: 'id' },
+            { ref: 'B', field: 'code' },
+        ]);
+    });
+
+    it('reads native enum types of another schema as a type override', () => {
+        const t = model(`CREATE TYPE other.mood AS ENUM ('ok'); CREATE TABLE t (m other.mood);`, 'T');
+        expect(t.fields[0]).toEqual({ name: 'm', type: 'TEXT', targets: { postgresql: { type: 'other.mood' } } });
+    });
+
+    it('reads tables of the default schema it is told', () => {
+        const t = model(`CREATE TABLE app.t (a integer); CREATE TABLE public.u (b integer);`, 'T', { defaultSchema: 'app' });
+        expect(t.metadata).toEqual({ name: 'T' });
+        expect(model(`CREATE TABLE public.u (b integer);`, 'U', { defaultSchema: 'app' }).metadata).toEqual({ name: 'U', schema: 'public' });
+    });
+
+    it('accepts DDL without tables', () => {
+        expect(parseDdl('').models.size).toBe(0);
+        expect(parseDdl('-- nothing here\n').models.size).toBe(0);
+    });
+
+    it.each([
+        ['inherited tables', 'CREATE TABLE a (id integer); CREATE TABLE b () INHERITS (a);', 'Inherited, partitioned and typed tables'],
+        ['partitioned tables', 'CREATE TABLE a (id integer) PARTITION BY RANGE (id);', 'Inherited, partitioned and typed tables'],
+        ['LIKE in tables', 'CREATE TABLE a (id integer); CREATE TABLE b (LIKE a);', 'Unsupported element TableLikeClause'],
+        ['generated columns', 'CREATE TABLE a (b integer, c integer GENERATED ALWAYS AS (b * 2) STORED);', 'Generated column c'],
+        ['multidimensional arrays', 'CREATE TABLE a (b integer[][]);', 'Multidimensional array columns'],
+        ['intervals of some fields', 'CREATE TABLE a (b interval year to month);', 'Interval columns limited to some fields'],
+        ['exclusion constraints', 'CREATE TABLE a (b integer, EXCLUDE USING gist (b WITH =));', 'Unsupported constraint CONSTR_EXCLUSION'],
+        ['unknown columns in constraints', 'CREATE TABLE a (b integer, UNIQUE (c));', 'Unknown column c of table a'],
+        ['unknown columns in ALTER TABLE', 'CREATE TABLE a (b integer); ALTER TABLE a ALTER COLUMN c SET NOT NULL;', 'Unknown column c of table a'],
+        ['other ALTER TABLE commands', 'CREATE TABLE a (b integer); ALTER TABLE a ADD COLUMN c integer;', 'Unsupported ALTER TABLE command AT_AddColumn'],
+        ['tables used before they are created', 'ALTER TABLE a ADD CONSTRAINT x UNIQUE (b);', 'Table a is used before it is created'],
+        ['tables that become the same model', 'CREATE TABLE s1.a (b integer); CREATE TABLE s2.a (b integer);', 'Tables s1.a and s2.a both become model A'],
+        ['foreign keys to tables without a primary key', 'CREATE TABLE a (b integer); CREATE TABLE c (d integer REFERENCES a);', 'Cannot find the key'],
+        ['indexes without a name', 'CREATE TABLE a (b integer); CREATE INDEX ON a (b);', 'Index without a name'],
+        ['descending indexes', 'CREATE TABLE a (b integer); CREATE INDEX i ON a (b DESC);', 'only plain columns'],
+        ['indexes with operator classes', 'CREATE TABLE a (b text); CREATE INDEX i ON a (b text_pattern_ops);', 'only plain columns'],
+        ['indexes with INCLUDE', 'CREATE TABLE a (b integer, c integer); CREATE INDEX i ON a (b) INCLUDE (c);', 'INCLUDE columns'],
+        ['checks comparing with null', 'CREATE TABLE a (b integer, CONSTRAINT x CHECK (b = NULL));', 'compared with a constant or another column'],
+        ['checks comparing with functions', 'CREATE TABLE a (b timestamp, CONSTRAINT x CHECK (b < now()));', 'compared with a constant or another column'],
+        ['checks of allowed numbers', 'CREATE TABLE a (b integer CHECK (b IN (1, 2)));', 'only comparisons'],
+        ['checks of two columns at once', 'CREATE TABLE a (b integer, c integer, CHECK (b > 0 AND c > 0));', 'only comparisons'],
+        ['array defaults that are not arrays', "CREATE TABLE a (b text[] DEFAULT 'x');", 'Unsupported default of b in table a: x'],
+        ['number defaults that are not numbers', "CREATE TABLE a (b integer DEFAULT 'x');", 'x is not a number'],
+        ['defaults calling other functions', 'CREATE TABLE a (b text DEFAULT upper(\'x\'));', 'only constants'],
+    ])('rejects %s', (_, ddl, message) => {
+        expect(() => parseDdl(ddl)).toThrow(message);
+    });
+});
+
+describe('the DDL parser', () => {
+    afterEach(() => {
+        vi.doUnmock('libpg-query');
+        vi.resetModules();
+    });
+
+    const withParser = async (parseSync: () => unknown) => {
+        vi.resetModules();
+        vi.doMock('libpg-query', () => ({ loadModule: async () => undefined, parseSync }));
+        return import('./DdlParser');
+    };
+
+    it('must be loaded before DDL is read synchronously', async () => {
+        const fresh = await withParser(() => { throw new Error('WASM module not initialized. Call loadModule() first.'); });
+        expect(() => fresh.parseDdl('CREATE TABLE a (b integer);')).toThrow('The DDL parser is not loaded; await loadDdlParser() first');
+    });
+
+    it('reports errors that are not Error objects', async () => {
+        const fresh = await withParser(() => { throw 'out of memory'; });
+        expect(() => fresh.parseDdl('CREATE TABLE a (b integer);')).toThrow('Cannot parse DDL: out of memory');
+    });
+
+    it('accepts a parse result without statements', async () => {
+        const fresh = await withParser(() => ({ version: 180004 }));
+        expect(fresh.parseDdl('').models.size).toBe(0);
+    });
+});

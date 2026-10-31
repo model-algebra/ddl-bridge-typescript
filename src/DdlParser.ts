@@ -360,6 +360,11 @@ class Parser {
         const constraints = new Map<string, Record<string, unknown>>();
         const tableCatalog: TableCatalog = { table: this.qualified(table), columns: {} };
         const columnCatalog = (sqlName: string) => tableCatalog.columns[fieldName(sqlName)] ??= { checks: [] };
+        const constraintsOf = (sqlName: string) => {
+            const own = constraints.get(sqlName);
+            if (own === undefined) throw new Error(`Unknown column ${sqlName} of table ${table.sqlName}`);
+            return own;
+        };
         const tableConstraints: TableConstraint[] = [];
         const usedNames = new Set<string>();
         // Names PostgreSQL gives constraints created without one; repeated ones get a number appended
@@ -389,7 +394,7 @@ class Parser {
             ...table.constraints.filter(constraint => !this.usesSkipped(constraint, table)).map(constraint => ({ constraint })),
         ];
         for (const { constraint, column } of all) {
-            const own = column !== undefined ? constraints.get(column)! : undefined;
+            const own = column !== undefined ? constraintsOf(column) : undefined;
             switch (constraint.contype) {
                 case 'CONSTR_NULL':
                     break;
@@ -410,7 +415,7 @@ class Parser {
                     const keys = column !== undefined ? [column] : strings(constraint.keys);
                     const name = nameOf(constraint, primary ? [] : keys, primary ? 'pkey' : 'key');
                     if (keys.length === 1) {
-                        constraints.get(keys[0])![primary ? 'primaryKey' : 'unique'] = true;
+                        constraintsOf(keys[0])[primary ? 'primaryKey' : 'unique'] = true;
                         if (primary) tableCatalog.primaryKey = name;
                         else columnCatalog(keys[0]).unique = name;
                     } else
@@ -425,7 +430,7 @@ class Parser {
                     const keys = column !== undefined ? [column] : strings(constraint.fk_attrs);
                     if (keys.length !== 1)
                         throw new Error(`Foreign key ${constraint.conname ?? ''} of table ${table.sqlName} has ${keys.length} columns; only single-column foreign keys are supported`);
-                    constraints.get(keys[0])!.foreignKey = this.foreignKey(constraint, table);
+                    constraintsOf(keys[0]).foreignKey = this.foreignKey(constraint, table);
                     columnCatalog(keys[0]).foreignKey = nameOf(constraint, keys, 'fkey');
                     break;
                 }
@@ -434,7 +439,7 @@ class Parser {
                     const name = nameOf(constraint, referenced !== undefined ? [referenced] : [], 'check');
                     const folded = referenced !== undefined ? this.fieldCheck(constraint.raw_expr, referenced) : undefined;
                     if (folded !== undefined) {
-                        Object.assign(constraints.get(referenced!)!, folded);
+                        Object.assign(constraintsOf(referenced!), folded);
                         columnCatalog(referenced!).checks.push(name);
                     } else
                         tableConstraints.push({ name, type: 'check', rule: this.rule(constraint.raw_expr, fieldName, `constraint ${name} of ${table.sqlName}`) });
@@ -477,6 +482,9 @@ class Parser {
         if ((typeName.arrayBounds?.length ?? 0) > 1)
             throw new Error(`Multidimensional array columns are not supported in table ${table.sqlName}`);
 
+        // The modifiers of INTERVAL YEAR TO MONTH and the like are a bit mask of fields, which can't be written back
+        if (name === 'interval' && (typeSchema === undefined || typeSchema === 'pg_catalog') && modifiers.length > 0 && modifiers[0] !== INTERVAL_FULL_RANGE)
+            throw new Error(`Interval columns limited to some fields are not supported in table ${table.sqlName}`);
         const scalar = this.scalarType(typeSchema, name, modifiers, table);
         if (scalar !== undefined && !(isArray && scalar.targets !== undefined)) {
             if (!isArray) return scalar;
@@ -526,7 +534,6 @@ class Parser {
             case 'timestamp': return { type: 'TIMESTAMP', ...precision(modifiers[0]) };
             case 'timestamptz': return { type: 'TIMESTAMP_TZ', ...precision(modifiers[0]) };
             case 'interval':
-                if (modifiers.length > 0 && modifiers[0] !== INTERVAL_FULL_RANGE) return undefined;
                 return { type: 'DURATION', ...precision(modifiers[1]) };
             default:
                 return undefined;

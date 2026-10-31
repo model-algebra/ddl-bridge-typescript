@@ -4,5 +4,11 @@ export default defineConfig({
     test: {
         environment: "node",
         globals: true,
+        coverage: {
+            provider: "v8",
+            include: ["src/**/*.ts"],
+            // Tests, test data, and the entry point that only re-exports
+            exclude: ["src/**/*.spec.ts", "src/test/**", "src/index.ts"],
+        },
     }
 });

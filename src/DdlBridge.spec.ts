@@ -470,3 +470,33 @@ describe('PostgreSQL target options', () => {
         expect(() => bridge.toTarget(model('fulltext'))).toThrow('Unsupported index method fulltext in index idx_attrs of T');
     });
 });
+
+describe('other DdlBridge conversions', () => {
+    const bridge = new DdlBridge({ comments: false });
+
+    it('should create a table for processor results with types inferred from the values', () => {
+        expect(bridge.toDdlFromProcessorResult([
+            { name: 'flag', value: true },
+            { name: 'count', value: 3 },
+            { name: 'ratio', value: 0.5 },
+            { name: 'tags', value: ['a'] },
+            { name: 'meta', value: { a: 1 } },
+            { name: 'label', value: 'x' },
+            { name: 'missing', value: null },
+        ], 'Result')).toBe(
+            `CREATE TABLE "Result" (\n    flag BOOLEAN,\n    count INTEGER,\n    ratio NUMERIC,\n    tags JSONB,\n    meta JSONB,\n    label TEXT,\n    missing TEXT\n);`);
+    });
+
+    it('should reject unknown field types', () => {
+        expect(() => bridge.toTarget(new Model({ metadata: { name: 'T' }, fields: [{ name: 'x', type: 'MONEY' }] })))
+            .toThrow('Unsupported field type: MONEY for field x');
+    });
+
+    it('should qualify foreign keys to models outside the set with the schema of the referencing model', () => {
+        const [ddl] = bridge.toDdlArray([new Model({
+            metadata: { name: 'Post', schema: 'blog' },
+            fields: [{ name: 'authorId', type: 'INT64', constraints: { foreignKey: { ref: 'Author', field: 'id' } } }],
+        })]);
+        expect(ddl).toContain('author_id BIGINT REFERENCES blog.author(id)');
+    });
+});

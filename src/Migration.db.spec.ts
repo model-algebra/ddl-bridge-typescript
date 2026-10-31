@@ -1,16 +1,9 @@
-import { execFileSync } from 'node:child_process';
-import pg from 'pg';
 import { Model, ModelSet } from 'model-algebra-common';
 import { Migration } from './Migration';
+import { adminUrl, createDatabase, type TestDatabase } from './test/database';
 import { eventsJson } from './test/models';
 
-/*
- * Migrates a real PostgreSQL database. Runs when MIGRATION_TEST_DATABASE_URL points at a server the test may create
- * databases on, e.g. postgres://postgres:test@localhost:55432/postgres; pg_dump of the same major version must be
- * on the PATH, or given in PG_DUMP.
- */
-const adminUrl = process.env.MIGRATION_TEST_DATABASE_URL;
-const pgDump = process.env.PG_DUMP ?? 'pg_dump';
+// Migrates a real PostgreSQL database, see src/test/database.ts
 const database = `migration_test_${process.pid}`;
 // The same backup prefix for every migration of the database, so backups of careful ones are left alone later
 const prefix = { backupPrefix: '_bk_' };
@@ -64,31 +57,19 @@ function version3(): any[] {
 const models = (json: any[]) => new ModelSet(json.map(model => new Model(model)));
 
 describe.skipIf(adminUrl === undefined)('Migration on PostgreSQL', () => {
-    let admin: pg.Client;
-    let db: pg.Client;
-    let url: string;
-
-    const dump = () => execFileSync(pgDump, ['--schema-only', '--no-owner', '--no-privileges', url], { encoding: 'utf-8' });
-    // Without the \\restrict lines, which pg_dump writes with a new random key every time
-    const schema = () => dump().replace(/^\\(un)?restrict .*$/gm, '');
-    const rows = async (sql: string) => (await db.query(sql)).rows;
+    let test: TestDatabase;
+    const dump = () => test.dump();
+    const schema = () => test.schema();
+    const rows = (sql: string) => test.rows(sql);
+    let db: TestDatabase['db'];
 
     beforeAll(async () => {
-        admin = new pg.Client({ connectionString: adminUrl });
-        await admin.connect();
-        await admin.query(`DROP DATABASE IF EXISTS ${database}`);
-        await admin.query(`CREATE DATABASE ${database}`);
-        const target = new URL(adminUrl!);
-        target.pathname = `/${database}`;
-        url = target.toString();
-        db = new pg.Client({ connectionString: url });
-        await db.connect();
+        test = await createDatabase(database);
+        db = test.db;
     });
 
     afterAll(async () => {
-        await db?.end();
-        await admin?.query(`DROP DATABASE IF EXISTS ${database}`);
-        await admin?.end();
+        await test?.drop();
     });
 
     it('creates the tables of an empty database', async () => {
