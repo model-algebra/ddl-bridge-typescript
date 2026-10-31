@@ -1,0 +1,14 @@
+#!/bin/sh
+# Builds dist/ and adds it to the commit, so that the committed dist/ matches the committed sources.
+# dist/ is committed because other projects install this package from GitHub without building it.
+# Enable once per clone: git config core.hooksPath .githooks
+
+changed=$(git diff --cached --name-only | grep -vE '^(dist/|\.github/|\.githooks/)|\.md$')
+[ -z "$changed" ] && exit 0
+
+echo "pre-commit: building dist/"
+if ! pnpm run build > /dev/null; then
+    echo "pre-commit: the build failed; nothing was committed"
+    exit 1
+fi
+git add -A dist

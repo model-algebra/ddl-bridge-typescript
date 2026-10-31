@@ -60,3 +60,11 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Check that the committed dist/ matches the sources
+        run: |
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            git status --short -- dist
+            echo "::error::dist/ differs from the build of the sources: run pnpm build and commit dist/"
+            exit 1
+          fi
