@@ -10,6 +10,24 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # For the migration tests, which run against a real database
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIGRATION_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+      PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -24,6 +42,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      - name: Install pg_dump 18
+        run: |
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

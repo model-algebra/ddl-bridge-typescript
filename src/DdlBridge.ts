@@ -1,4 +1,7 @@
 import type { ModelBridge, Model, Rule, TableConstraint, Index } from "model-algebra-common";
+import { toModelData, type FieldData, type ModelData } from "model-algebra-typescript";
+import { ident, numberLiteral, quoteIdent, quoteLiteral, valueLiteral } from "./sql.js";
+import { parseDdl } from "./DdlParser.js";
 
 export interface DdlBridgeOptions {
     /** Emit COMMENT ON statements from model and field descriptions (default: true). */
@@ -6,23 +9,7 @@ export interface DdlBridgeOptions {
 }
 
 /** Resolves a referenced model name to a (possibly schema-qualified) table name. */
-type TableResolver = (modelName: string) => string;
-
-// PostgreSQL reserved key words (Appendix C, "reserved" and "reserved (can be function or type)")
-const RESERVED_WORDS = new Set([
-    'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc', 'asymmetric', 'authorization',
-    'binary', 'both', 'case', 'cast', 'check', 'collate', 'collation', 'column', 'concurrently',
-    'constraint', 'create', 'cross', 'current_catalog', 'current_date', 'current_role',
-    'current_schema', 'current_time', 'current_timestamp', 'current_user', 'default', 'deferrable',
-    'desc', 'distinct', 'do', 'else', 'end', 'except', 'false', 'fetch', 'for', 'foreign', 'freeze',
-    'from', 'full', 'grant', 'group', 'having', 'ilike', 'in', 'initially', 'inner', 'intersect',
-    'into', 'is', 'isnull', 'join', 'lateral', 'leading', 'left', 'like', 'limit', 'localtime',
-    'localtimestamp', 'natural', 'not', 'notnull', 'null', 'offset', 'on', 'only', 'or', 'order',
-    'outer', 'overlaps', 'placing', 'primary', 'references', 'returning', 'right', 'select',
-    'session_user', 'similar', 'some', 'symmetric', 'system_user', 'table', 'tablesample', 'then',
-    'to', 'trailing', 'true', 'union', 'unique', 'user', 'using', 'variadic', 'verbose', 'when',
-    'where', 'window', 'with'
-]);
+export type TableResolver = (modelName: string) => string;
 
 const INTEGER_TYPES = new Set(['integer', 'INT16', 'INT32', 'INT64']);
 
@@ -58,43 +45,6 @@ const RULE_OPERATORS: Record<string, string> = {
     '=': '=', '!=': '<>', '<': '<', '<=': '<=', '>': '>', '>=': '>=',
 };
 
-function toSnakeCase(name: string): string {
-    return name
-        .replace(/([A-Z])/g, '_$1')
-        .toLowerCase()
-        .replace(/^_/, '')
-        .replace(/[^a-z0-9_]/g, '');
-}
-
-function quoteIdent(name: string): string {
-    return /^[a-z_][a-z0-9_]*$/.test(name) && !RESERVED_WORDS.has(name)
-        ? name
-        : `"${name.replace(/"/g, '""')}"`;
-}
-
-/** Model name (camelCase or PascalCase) to a quoted SQL identifier. */
-function ident(name: string): string {
-    return quoteIdent(toSnakeCase(name));
-}
-
-function quoteLiteral(value: unknown): string {
-    return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function numberLiteral(value: unknown, what: string): string {
-    if (typeof value !== 'number' || !Number.isFinite(value))
-        throw new Error(`${what} must be a finite number, got ${JSON.stringify(value)}`);
-    return String(value);
-}
-
-function valueLiteral(value: unknown, what: string): string {
-    if (value === null) return 'NULL';
-    if (typeof value === 'number') return numberLiteral(value, what);
-    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-    if (typeof value === 'string') return quoteLiteral(value);
-    return quoteLiteral(JSON.stringify(value));
-}
-
 /** Fractional seconds precision modifier, e.g. TIMESTAMP(3); PostgreSQL allows 0..6. */
 function precisionModifier(params: Record<string, any>, fieldName: string): string {
     if (params.precision === undefined) return '';
@@ -113,7 +63,7 @@ function postgresOptions(owner: Record<string, any>, allowed: string[], where: s
 }
 
 /** Foreign key of the field; `foreign_key` is accepted as a legacy alias of `foreignKey`. */
-function foreignKeyOf(field: Record<string, any>): Record<string, any> | undefined {
+export function foreignKeyOf(field: Record<string, any>): Record<string, any> | undefined {
     return field.constraints?.foreignKey ?? field.constraints?.foreign_key;
 }
 
@@ -126,12 +76,20 @@ export class DdlBridge implements ModelBridge<Model, string> {
     }
 
     toTarget(model: Model): string {
-        const schema = model.metadata.schema;
-        return this.toStatements(model, ref => this.tableName(ref, schema), new Set(), new Map()).join('\n\n');
+        const data = toModelData(model);
+        const schema = data.metadata.schema;
+        return this.createTableStatements(data, ref => this.tableName(ref, schema), new Set(), new Map()).join('\n\n');
     }
 
-    toModel(_ddl: string): Model {
-        throw new Error("DdlBridge.toModel() is not implemented yet");
+    /**
+     * Reads the model of the one table the DDL creates. The DDL parser must be loaded first, see loadDdlParser().
+     * Names are converted back to model names: user_profile becomes UserProfile, first_name becomes firstName.
+     */
+    toModel(ddl: string): Model {
+        const { models } = parseDdl(ddl);
+        if (models.size !== 1)
+            throw new Error(`DdlBridge.toModel() needs DDL of exactly one table, found ${models.size}; use DdlSetBridge for several`);
+        return models.models[0];
     }
 
     /**
@@ -139,13 +97,14 @@ export class DdlBridge implements ModelBridge<Model, string> {
      * foreign keys that cannot be created inline because of reference cycles are appended as ALTER TABLE statements.
      */
     toDdlArray(models: Model[]): string[] {
-        const byName = new Map(models.map(model => [model.metadata.name, model]));
+        const data = models.map(model => toModelData(model));
+        const byName = new Map(data.map(model => [model.metadata.name, model]));
         const created = new Set<string>();
         const createdTypes = new Map<string, string>();
         const scripts: string[] = [];
         const deferredStatements: string[] = [];
 
-        for (const model of this.sortByDependencies(models, byName)) {
+        for (const model of this.sortByDependencies(data, byName)) {
             const resolve: TableResolver = ref => this.tableName(ref, (byName.get(ref) ?? model).metadata.schema);
             const deferred = new Set(model.fields
                 .filter(field => {
@@ -154,11 +113,9 @@ export class DdlBridge implements ModelBridge<Model, string> {
                 })
                 .map(field => field.name));
 
-            scripts.push(this.toStatements(model, resolve, deferred, createdTypes).join('\n\n'));
+            scripts.push(this.createTableStatements(model, resolve, deferred, createdTypes).join('\n\n'));
             for (const field of model.fields.filter(field => deferred.has(field.name)))
-                deferredStatements.push(
-                    `ALTER TABLE ${this.tableName(model.metadata.name, model.metadata.schema)} ` +
-                    `ADD FOREIGN KEY (${ident(field.name)}) ${this.referencesClause(foreignKeyOf(field)!, resolve)};`);
+                deferredStatements.push(this.addForeignKey(model, field, resolve));
             created.add(model.metadata.name);
         }
         return [...scripts, ...deferredStatements];
@@ -170,23 +127,32 @@ export class DdlBridge implements ModelBridge<Model, string> {
     }
 
     convertField(field: Record<string, any>, resolve: TableResolver = ref => this.tableName(ref), deferForeignKey = false, schema?: string): string {
-        const sqlType = this.getSqlType(field, schema);
-        const parts = this.getConstraintParts(field, sqlType, resolve, deferForeignKey);
+        return `    ${this.columnDefinition(field, resolve, deferForeignKey, schema)}`;
+    }
+
+    /*
+     * The methods below build parts of statements; migrations use them to alter tables one column or constraint at a time.
+     */
+
+    /** Column name, type and constraints, as in CREATE TABLE or ALTER TABLE ... ADD COLUMN. */
+    columnDefinition(field: Record<string, any>, resolve: TableResolver, withoutForeignKey = false, schema?: string): string {
+        const sqlType = this.sqlType(field, schema);
+        const parts = this.getConstraintParts(field, sqlType, resolve, withoutForeignKey);
         const constraintStr = parts.length > 0 ? ' ' + parts.join(' ') : '';
-        return `    ${ident(field.name)} ${sqlType}${constraintStr}`;
+        return `${ident(field.name)} ${sqlType}${constraintStr}`;
     }
 
     /**
      * @param createdTypes enum types already created by previous scripts: qualified name to its values,
      *                     so a type shared by several models is created once
      */
-    private toStatements(model: Model, resolve: TableResolver, deferredForeignKeys: Set<string>, createdTypes: Map<string, string>): string[] {
+    createTableStatements(model: ModelData, resolve: TableResolver, deferredForeignKeys: Set<string>, createdTypes: Map<string, string>): string[] {
         const { name, schema } = model.metadata;
         const table = this.tableName(name, schema);
         const fieldNames = new Set(model.fields.map(field => field.name));
 
         const tableConstraints = model.constraints ?? [];
-        if (tableConstraints.some(c => c.type === 'primaryKey') && model.fields.some(f => (f as any).constraints?.primaryKey === true))
+        if (tableConstraints.some(c => c.type === 'primaryKey') && model.fields.some(f => f.constraints?.primaryKey === true))
             throw new Error(`Model ${name} declares a primary key both on a field and in table constraints`);
 
         const lines = [
@@ -205,7 +171,8 @@ export class DdlBridge implements ModelBridge<Model, string> {
         return statements;
     }
 
-    private createEnumTypes(model: Model, createdTypes: Map<string, string>): string[] {
+    /** CREATE TYPE statements for the native enum types of the model that are not in createdTypes yet. */
+    createEnumTypes(model: ModelData, createdTypes: Map<string, string>): string[] {
         const statements: string[] = [];
         for (const field of model.fields) {
             const enumType = postgresOptions(field, FIELD_TARGET_OPTIONS, `field ${field.name}`).enumType;
@@ -223,36 +190,98 @@ export class DdlBridge implements ModelBridge<Model, string> {
         return statements;
     }
 
-    private enumTypeValues(field: Record<string, any>): string[] {
-        const values = field.parameters?.values;
-        if (field.type !== 'ENUM' || !Array.isArray(values) || values.length === 0)
-            throw new Error(`enumType of field ${field.name} requires type ENUM with non-empty parameters.values`);
-        return values;
+    /** ALTER TABLE statement adding the foreign key of the field. */
+    addForeignKey(model: ModelData, field: FieldData, resolve: TableResolver): string {
+        return `ALTER TABLE ${this.tableName(model.metadata.name, model.metadata.schema)} ` +
+            `ADD FOREIGN KEY (${ident(field.name)}) ${this.referencesClause(foreignKeyOf(field)!, resolve)};`;
     }
 
-    private tableName(modelName: string, schema?: string): string {
+    tableName(modelName: string, schema?: string): string {
         return schema !== undefined ? `${ident(schema)}.${ident(modelName)}` : ident(modelName);
     }
 
-    /** Topological order by foreign keys, keeping the input order where possible; cycles are broken arbitrarily. */
-    private sortByDependencies(models: Model[], byName: Map<string, Model>): Model[] {
-        const result: Model[] = [];
-        const state = new Map<Model, 'visiting' | 'done'>();
-        const visit = (model: Model) => {
-            if (state.has(model)) return;
-            state.set(model, 'visiting');
-            for (const field of model.fields) {
-                const target = byName.get(foreignKeyOf(field)?.ref);
-                if (target !== undefined && target !== model) visit(target);
-            }
-            state.set(model, 'done');
-            result.push(model);
-        };
-        models.forEach(visit);
-        return result;
+    sqlType(field: Record<string, any>, schema?: string): string {
+        const options = postgresOptions(field, FIELD_TARGET_OPTIONS, `field ${field.name}`);
+        if (options.type !== undefined && options.enumType !== undefined)
+            throw new Error(`Field ${field.name} cannot have both PostgreSQL type and enumType`);
+        if (options.type !== undefined) {
+            if (typeof options.type !== 'string' || !TYPE_OVERRIDE_PATTERN.test(options.type) || options.type.includes('--'))
+                throw new Error(`Invalid PostgreSQL type override for field ${field.name}: ${JSON.stringify(options.type)}`);
+            return options.type;
+        }
+        if (options.enumType !== undefined) {
+            this.enumTypeValues(field);
+            return this.tableName(options.enumType, schema);
+        }
+        return this.canonicalSqlType(field.type, field.parameters || {}, field.name);
     }
 
-    private tableConstraint(constraint: TableConstraint, fieldNames: Set<string>, modelName: string): string {
+    identityClause(field: Record<string, any>): string | undefined {
+        const c = field.constraints ?? {};
+        if (c.identity === undefined) return undefined;
+        if (IDENTITY_CLAUSES[c.identity] === undefined)
+            throw new Error(`Unsupported identity mode: ${c.identity} for field ${field.name}`);
+        if (!INTEGER_TYPES.has(field.type))
+            throw new Error(`Identity requires an integer type, field ${field.name} has type ${field.type}`);
+        if (c.default !== undefined)
+            throw new Error(`Field ${field.name} cannot have both identity and default`);
+        return IDENTITY_CLAUSES[c.identity];
+    }
+
+    /** Default value expression of the field, if it has one. */
+    defaultExpression(field: Record<string, any>, sqlType: string): string | undefined {
+        const def = field.constraints?.default;
+        if (def === undefined) return undefined;
+        if (def === null || typeof def !== 'object' || ('value' in def) === ('function' in def))
+            throw new Error(`Default of ${field.name} must be {"value": ...} or {"function": ...}`);
+        if ('value' in def) {
+            if (field.type === 'ARRAY' && Array.isArray(def.value))
+                return `ARRAY[${def.value.map((v: unknown) => valueLiteral(v, `Default of ${field.name}`)).join(', ')}]::${sqlType}`;
+            return valueLiteral(def.value, `Default of ${field.name}`);
+        }
+        const expression = DEFAULT_FUNCTIONS[def.function];
+        if (expression === undefined)
+            throw new Error(`Unsupported default function: ${def.function} for field ${field.name}`);
+        return expression;
+    }
+
+    /** CHECK clauses enforcing min, max, enum and regex of the field, in the order CREATE TABLE has them. */
+    checkClauses(field: Record<string, any>, sqlType: string): string[] {
+        const c = field.constraints ?? {};
+        const col = ident(field.name);
+        const isArray = field.type === 'ARRAY';
+        const checks: string[] = [];
+        if (isArray && (c.min !== undefined || c.max !== undefined || c.regex !== undefined))
+            throw new Error(`min, max and regex constraints are not supported for ARRAY field ${field.name}`);
+        if (c.min !== undefined || c.max !== undefined) {
+            const range: string[] = [];
+            if (c.min !== undefined) range.push(`${col} >= ${numberLiteral(c.min, `Min of ${field.name}`)}`);
+            if (c.max !== undefined) range.push(`${col} <= ${numberLiteral(c.max, `Max of ${field.name}`)}`);
+            checks.push(`CHECK (${range.join(' AND ')})`);
+        }
+        const enumValues = this.allowedValues(field);
+        if (enumValues) {
+            const vals = enumValues.map((v: any) => quoteLiteral(v)).join(', ');
+            checks.push(isArray ? `CHECK (${col} <@ ARRAY[${vals}]::${sqlType})` : `CHECK (${col} IN (${vals}))`);
+        }
+        if (c.regex !== undefined)
+            checks.push(`CHECK (${col} ~ ${quoteLiteral(c.regex)})`);
+        return checks;
+    }
+
+    referencesClause(foreignKey: Record<string, any>, resolve: TableResolver): string {
+        let clause = `REFERENCES ${resolve(foreignKey.ref)}(${ident(foreignKey.field)})`;
+        for (const [key, keyword] of [['onDelete', 'ON DELETE'], ['onUpdate', 'ON UPDATE']]) {
+            if (foreignKey[key] === undefined) continue;
+            const action = FK_ACTIONS[foreignKey[key]];
+            if (action === undefined)
+                throw new Error(`Unsupported ${key} action: ${foreignKey[key]} in reference to ${foreignKey.ref}`);
+            clause += ` ${keyword} ${action}`;
+        }
+        return clause;
+    }
+
+    tableConstraint(constraint: TableConstraint, fieldNames: Set<string>, modelName: string): string {
         const prefix = `CONSTRAINT ${ident(constraint.name)}`;
         switch (constraint.type) {
             case 'primaryKey':
@@ -268,7 +297,7 @@ export class DdlBridge implements ModelBridge<Model, string> {
         }
     }
 
-    private createIndex(index: Index, table: string, fieldNames: Set<string>, modelName: string): string {
+    createIndex(index: Index, table: string, fieldNames: Set<string>, modelName: string): string {
         const where = `index ${index.name} of ${modelName}`;
         const unique = index.unique === true ? 'UNIQUE ' : '';
         const predicate = index.where !== undefined ? ` WHERE ${this.ruleExpression(index.where, fieldNames, where)}` : '';
@@ -277,6 +306,31 @@ export class DdlBridge implements ModelBridge<Model, string> {
             throw new Error(`Unsupported index method ${method} in ${where}`);
         const using = method !== undefined ? ` USING ${method}` : '';
         return `CREATE ${unique}INDEX ${ident(index.name)} ON ${table}${using} (${this.columnList(index.fields, fieldNames, where)})${predicate};`;
+    }
+
+    private enumTypeValues(field: Record<string, any>): string[] {
+        const values = field.parameters?.values;
+        if (field.type !== 'ENUM' || !Array.isArray(values) || values.length === 0)
+            throw new Error(`enumType of field ${field.name} requires type ENUM with non-empty parameters.values`);
+        return values;
+    }
+
+    /** Topological order by foreign keys, keeping the input order where possible; cycles are broken arbitrarily. */
+    private sortByDependencies(models: ModelData[], byName: Map<string, ModelData>): ModelData[] {
+        const result: ModelData[] = [];
+        const state = new Map<ModelData, 'visiting' | 'done'>();
+        const visit = (model: ModelData) => {
+            if (state.has(model)) return;
+            state.set(model, 'visiting');
+            for (const field of model.fields) {
+                const target = byName.get(foreignKeyOf(field)?.ref);
+                if (target !== undefined && target !== model) visit(target);
+            }
+            state.set(model, 'done');
+            result.push(model);
+        };
+        models.forEach(visit);
+        return result;
     }
 
     private columnList(fields: string[] | undefined, fieldNames: Set<string>, where: string): string {
@@ -304,7 +358,7 @@ export class DdlBridge implements ModelBridge<Model, string> {
         return `${this.column(rule.field, fieldNames, where)} ${op} ${right}`;
     }
 
-    private commentStatements(model: Model, table: string): string[] {
+    private commentStatements(model: ModelData, table: string): string[] {
         const statements: string[] = [];
         if (model.metadata.description !== undefined)
             statements.push(`COMMENT ON TABLE ${table} IS ${quoteLiteral(model.metadata.description)};`);
@@ -312,22 +366,6 @@ export class DdlBridge implements ModelBridge<Model, string> {
             if (field.description !== undefined)
                 statements.push(`COMMENT ON COLUMN ${table}.${ident(field.name)} IS ${quoteLiteral(field.description)};`);
         return statements;
-    }
-
-    private getSqlType(field: Record<string, any>, schema?: string): string {
-        const options = postgresOptions(field, FIELD_TARGET_OPTIONS, `field ${field.name}`);
-        if (options.type !== undefined && options.enumType !== undefined)
-            throw new Error(`Field ${field.name} cannot have both PostgreSQL type and enumType`);
-        if (options.type !== undefined) {
-            if (typeof options.type !== 'string' || !TYPE_OVERRIDE_PATTERN.test(options.type) || options.type.includes('--'))
-                throw new Error(`Invalid PostgreSQL type override for field ${field.name}: ${JSON.stringify(options.type)}`);
-            return options.type;
-        }
-        if (options.enumType !== undefined) {
-            this.enumTypeValues(field);
-            return this.tableName(options.enumType, schema);
-        }
-        return this.canonicalSqlType(field.type, field.parameters || {}, field.name);
     }
 
     private canonicalSqlType(type: string, params: Record<string, any>, fieldName: string): string {
@@ -385,37 +423,14 @@ export class DdlBridge implements ModelBridge<Model, string> {
     private getConstraintParts(field: Record<string, any>, sqlType: string, resolve: TableResolver, deferForeignKey: boolean): string[] {
         const parts: string[] = [];
         const c = field.constraints ?? {};
-        const col = ident(field.name);
-        const isArray = field.type === 'ARRAY';
-        if (c.identity !== undefined) {
-            if (IDENTITY_CLAUSES[c.identity] === undefined)
-                throw new Error(`Unsupported identity mode: ${c.identity} for field ${field.name}`);
-            if (!INTEGER_TYPES.has(field.type))
-                throw new Error(`Identity requires an integer type, field ${field.name} has type ${field.type}`);
-            if (c.default !== undefined)
-                throw new Error(`Field ${field.name} cannot have both identity and default`);
-            parts.push(IDENTITY_CLAUSES[c.identity]);
-        }
-        if (c.default !== undefined) parts.push(`DEFAULT ${this.defaultExpression(c.default, field, sqlType)}`);
+        const identity = this.identityClause(field);
+        if (identity !== undefined) parts.push(identity);
+        const defaultValue = this.defaultExpression(field, sqlType);
+        if (defaultValue !== undefined) parts.push(`DEFAULT ${defaultValue}`);
         if (c.nullable === false) parts.push('NOT NULL');
         if (c.primaryKey === true) parts.push('PRIMARY KEY');
         if (c.unique === true) parts.push('UNIQUE');
-        if (isArray && (c.min !== undefined || c.max !== undefined || c.regex !== undefined))
-            throw new Error(`min, max and regex constraints are not supported for ARRAY field ${field.name}`);
-        if (c.min !== undefined || c.max !== undefined) {
-            const range: string[] = [];
-            if (c.min !== undefined) range.push(`${col} >= ${numberLiteral(c.min, `Min of ${field.name}`)}`);
-            if (c.max !== undefined) range.push(`${col} <= ${numberLiteral(c.max, `Max of ${field.name}`)}`);
-            parts.push(`CHECK (${range.join(' AND ')})`);
-        }
-        const enumValues = this.allowedValues(field);
-        if (enumValues) {
-            const vals = enumValues.map((v: any) => quoteLiteral(v)).join(', ');
-            parts.push(isArray ? `CHECK (${col} <@ ARRAY[${vals}]::${sqlType})` : `CHECK (${col} IN (${vals}))`);
-        }
-        if (c.regex !== undefined) {
-            parts.push(`CHECK (${col} ~ ${quoteLiteral(c.regex)})`);
-        }
+        parts.push(...this.checkClauses(field, sqlType));
         const foreignKey = foreignKeyOf(field);
         if (foreignKey !== undefined && !deferForeignKey)
             parts.push(this.referencesClause(foreignKey, resolve));
@@ -431,31 +446,5 @@ export class DdlBridge implements ModelBridge<Model, string> {
         if (postgresOptions(field, FIELD_TARGET_OPTIONS, `field ${field.name}`).enumType !== undefined) return null;
         const typed = field.type === 'ARRAY' ? field.parameters?.items : field;
         return typed?.type === 'ENUM' && Array.isArray(typed.parameters?.values) ? typed.parameters.values : null;
-    }
-
-    private defaultExpression(def: Record<string, any>, field: Record<string, any>, sqlType: string): string {
-        if (def === null || typeof def !== 'object' || ('value' in def) === ('function' in def))
-            throw new Error(`Default of ${field.name} must be {"value": ...} or {"function": ...}`);
-        if ('value' in def) {
-            if (field.type === 'ARRAY' && Array.isArray(def.value))
-                return `ARRAY[${def.value.map((v: unknown) => valueLiteral(v, `Default of ${field.name}`)).join(', ')}]::${sqlType}`;
-            return valueLiteral(def.value, `Default of ${field.name}`);
-        }
-        const expression = DEFAULT_FUNCTIONS[def.function];
-        if (expression === undefined)
-            throw new Error(`Unsupported default function: ${def.function} for field ${field.name}`);
-        return expression;
-    }
-
-    private referencesClause(foreignKey: Record<string, any>, resolve: TableResolver): string {
-        let clause = `REFERENCES ${resolve(foreignKey.ref)}(${ident(foreignKey.field)})`;
-        for (const [key, keyword] of [['onDelete', 'ON DELETE'], ['onUpdate', 'ON UPDATE']]) {
-            if (foreignKey[key] === undefined) continue;
-            const action = FK_ACTIONS[foreignKey[key]];
-            if (action === undefined)
-                throw new Error(`Unsupported ${key} action: ${foreignKey[key]} in reference to ${foreignKey.ref}`);
-            clause += ` ${keyword} ${action}`;
-        }
-        return clause;
     }
 }

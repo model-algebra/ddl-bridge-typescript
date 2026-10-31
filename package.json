@@ -1,23 +1,22 @@
 {
   "name": "ddl-bridge-typescript",
-  "description": "Converts model-algebra models to DDL (PostgreSQL)",
+  "description": "Converts model-algebra models to PostgreSQL DDL and back, and migrates databases to models",
   "version": "0.1.0",
   "private": false,
-  "main": "dist/index.cjs.js",
-  "module": "dist/index.esm.js",
+  "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.esm.js",
-      "require": "./dist/index.cjs.js"
+      "import": "./dist/index.js"
     }
   },
   "keywords": [
     "model-algebra",
     "ddl",
     "postgresql",
+    "migration",
     "typescript"
   ],
   "author": "",
@@ -27,17 +26,22 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
     "type-check": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
+    "@types/pg": "8.18.0",
+    "pg": "8.23.1",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
   },
   "dependencies": {
-    "model-algebra-common": "github:model-algebra/common-typescript"
+    "libpg-query": "18.1.5",
+    "model-algebra-common": "github:model-algebra/common-typescript",
+    "model-algebra-typescript": "github:model-algebra/model-algebra-typescript"
   }
 }
