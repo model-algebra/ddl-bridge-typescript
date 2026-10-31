@@ -13,14 +13,7 @@ that bring a database to a set of models.
 pnpm add github:model-algebra/ddl-bridge-typescript
 ```
 
-With pnpm, allow the build scripts of the GitHub-hosted packages in `pnpm-workspace.yaml`:
-
-```yaml
-onlyBuiltDependencies:
-  - ddl-bridge-typescript
-  - model-algebra-common
-  - model-algebra-typescript
-```
+The built package is in the repository, so nothing is built when it is installed.
 
 ## Models to DDL
 
@@ -133,6 +126,15 @@ pnpm test:coverage   # with a coverage report
 pnpm type-check
 pnpm build
 ```
+
+`dist/` is committed, because other projects install the package from GitHub without building it. Enable the
+pre-commit hook once per clone; it rebuilds `dist/` and adds it to every commit that changes the sources:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+CI fails when the committed `dist/` differs from a build of the sources.
 
 What the tests cover:
 
