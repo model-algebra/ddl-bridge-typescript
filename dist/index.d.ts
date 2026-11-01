@@ -3,4 +3,6 @@ export { DdlSetBridge, type DdlSetBridgeOptions } from './DdlSetBridge.js';
 export { parseDdl, loadDdlParser, type DdlParseOptions, type ParsedSchema, type SchemaCatalog, type TableCatalog, type ColumnCatalog, } from './DdlParser.js';
 export { diffToDdl, DEFAULT_BACKUP_PREFIX, type DiffDdl, type DiffDdlOptions, type Backup } from './DiffDdl.js';
 export { Migration, type MigrationOptions, type MigrationPlan, type SqlExecutor } from './Migration.js';
+export { tableName, columnName } from './names.js';
+export { ident, quoteIdent, quoteLiteral, toSnakeCase, fromSqlName } from './sql.js';
 //# sourceMappingURL=index.d.ts.map

@@ -24,6 +24,16 @@ new DdlBridge().toTarget(userModel)              // CREATE TABLE "user" (...)
 new DdlSetBridge().toTarget(new ModelSet(models)) // every table, referenced ones first
 ```
 
+SQL names come from model and field names in snake_case, quoted where PostgreSQL needs it. Code that queries the
+tables can use the same names:
+
+```ts
+import { tableName, columnName } from 'ddl-bridge-typescript'
+
+tableName(goodsModel)          // goods_model; "user" for User; shop.offer with a schema
+columnName('vendorId')         // vendor_id
+```
+
 ## DDL to models
 
 DDL is read with the PostgreSQL parser itself ([libpg-query](https://github.com/launchql/libpg-query-node), compiled
